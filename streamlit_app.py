@@ -8,6 +8,14 @@ import requests
 import json
 from datetime import datetime
 from typing import Dict, List
+import sys
+from pathlib import Path
+
+# Add src to path for imports
+sys.path.insert(0, str(Path(__file__).parent))
+
+from src.pdf_handler import PDFUploadHandler
+from src.RAG.retrieval import RAGRetriever
 
 # ===== Page Config =====
 st.set_page_config(
@@ -69,6 +77,15 @@ if "messages" not in st.session_state:
 if "query_history" not in st.session_state:
     st.session_state.query_history = []
 
+if "current_pdf" not in st.session_state:
+    st.session_state.current_pdf = None
+
+if "rag_retriever" not in st.session_state:
+    st.session_state.rag_retriever = None
+
+if "pdf_handler" not in st.session_state:
+    st.session_state.pdf_handler = PDFUploadHandler()
+
 # ===== Helper Functions =====
 
 def check_api_health() -> bool:
@@ -76,27 +93,17 @@ def check_api_health() -> bool:
     try:
         response = requests.get(f"{API_BASE_URL}/health", timeout=2)
         return response.status_code == 200
-    except requests.exceptions.ConnectionError:
-        return False
-    except Exception:
+    except:
         return False
 
 
 def query_rag(question: str) -> Dict:
-    """
-    Send question to RAG API and get answer.
-    
-    Args:
-        question: User's question
-        
-    Returns:
-        Response dict with answer and sources
-    """
+    """Send question to RAG API and get answer."""
     try:
         response = requests.post(
             f"{API_BASE_URL}/query",
             json={"question": question},
-            timeout=180  # 3 minutes timeout
+            timeout=180
         )
         
         if response.status_code == 200:
@@ -115,37 +122,34 @@ def query_rag(question: str) -> Dict:
         return {"error": "Error", "message": str(e)}
 
 
+def query_local_rag(question: str, rag_retriever) -> Dict:
+    """Query using local RAG retriever (for uploaded PDFs)."""
+    try:
+        result = rag_retriever.query(question)
+        return result
+    except Exception as e:
+        return {"error": "Error", "message": str(e)}
+
+
 def get_api_stats() -> Dict:
     """Get stats from API."""
     try:
         response = requests.get(f"{API_BASE_URL}/stats", timeout=5)
         if response.status_code == 200:
             return response.json()
-    except Exception:
+    except:
         pass
     return {}
-
-
-def get_query_logs(limit: int = 10) -> Dict:
-    """Get query logs from API."""
-    try:
-        response = requests.get(f"{API_BASE_URL}/logs?limit={limit}", timeout=5)
-        if response.status_code == 200:
-            return response.json()
-    except Exception:
-        pass
-    return {"logs": []}
-
 
 # ===== Main App =====
 
 # Header
 st.title("🏥 Healthcare RAG Assistant")
-st.markdown("Ask questions about clinical documents. Get grounded answers with sources.")
+st.markdown("Upload clinical documents or ask questions about pre-loaded documents.")
 
 # Sidebar
 with st.sidebar:
-    st.header("⚙️ Settings")
+    st.header("⚙️ Settings & Upload")
     
     # API Health Check
     api_healthy = check_api_health()
@@ -153,151 +157,236 @@ with st.sidebar:
         st.success("✅ API Connected")
     else:
         st.error("❌ API Not Connected")
-        st.write("Make sure FastAPI is running: `python -m src.API.main`")
+    
+    st.divider()
+    
+    # Mode Selection
+    st.header("📂 Document Mode")
+    
+    mode = st.radio(
+        "Choose document source:",
+        ["Use Sample Document", "Upload Custom PDF"]
+    )
+    
+    st.divider()
+    
+    # PDF Upload Section
+    if mode == "Upload Custom PDF":
+        st.header("📤 Upload PDF")
+        
+        uploaded_file = st.file_uploader(
+            "Choose a PDF file",
+            type="pdf",
+            help="Upload a clinical document (PDF format)"
+        )
+        
+        if uploaded_file is not None:
+            st.info(f"📄 File selected: {uploaded_file.name}")
+            
+            if st.button("📥 Ingest PDF", use_container_width=True):
+                with st.spinner(f"Processing {uploaded_file.name}..."):
+                    try:
+                        # Extract text
+                        pdf_text = st.session_state.pdf_handler.extract_text_from_pdf(
+                            uploaded_file
+                        )
+                        st.success(f"✅ Extracted {len(pdf_text)} characters")
+                        
+                        # Ingest into ChromaDB
+                        success, message, chunk_count = st.session_state.pdf_handler.ingest_pdf_content(
+                            pdf_text=pdf_text,
+                            pdf_name=uploaded_file.name,
+                            collection_name="user_uploads"
+                        )
+                        
+                        if success:
+                            st.success(f"✅ {message}")
+                            st.session_state.current_pdf = uploaded_file.name
+                            
+                            # Create RAG retriever for uploaded PDF
+                            vector_store = st.session_state.pdf_handler.get_vector_store(
+                                collection_name="user_uploads"
+                            )
+                            
+                            if vector_store:
+                                # Create a temporary RAG retriever
+                                class UploadedRAGRetriever:
+                                    def __init__(self, vector_store):
+                                        self.vector_store = vector_store
+                                        from langchain_google_genai import ChatGoogleGenerativeAI
+                                        self.llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+                                        self.top_k = 3
+                                    
+                                    def query(self, question: str) -> Dict:
+                                        from datetime import datetime
+                                        start_time = datetime.now()
+                                        
+                                        # Retrieve
+                                        results = self.vector_store.similarity_search_with_relevance_scores(
+                                            question, k=self.top_k
+                                        )
+                                        
+                                        # Build prompt
+                                        context_parts = []
+                                        chunks = []
+                                        for i, (doc, score) in enumerate(results):
+                                            context_parts.append(
+                                                f"--- DOCUMENT {i+1} ---\n{doc.page_content}\n"
+                                            )
+                                            chunks.append({
+                                                "content": doc.page_content,
+                                                "metadata": doc.metadata,
+                                                "relevance_score": float(score),
+                                                "rank": i + 1
+                                            })
+                                        
+                                        context = "\n".join(context_parts)
+                                        
+                                        prompt = f"""Answer based ONLY on these documents:
+
+{context}
+
+Question: {question}
+
+Answer:"""
+                                        
+                                        # Generate answer
+                                        response = self.llm.invoke(prompt)
+                                        answer = response.content
+                                        
+                                        end_time = datetime.now()
+                                        latency_ms = (end_time - start_time).total_seconds() * 1000
+                                        
+                                        return {
+                                            "question": question,
+                                            "answer": answer,
+                                            "sources": [
+                                                {
+                                                    "rank": chunk["rank"],
+                                                    "source": chunk["metadata"].get("source"),
+                                                    "chunk_number": chunk["metadata"].get("chunk_number"),
+                                                    "relevance_score": chunk["relevance_score"],
+                                                    "preview": chunk["content"][:200] + "..."
+                                                }
+                                                for chunk in chunks
+                                            ],
+                                            "retrieval_count": len(chunks),
+                                            "latency_ms": round(latency_ms, 2),
+                                            "timestamp": start_time.isoformat()
+                                        }
+                                
+                                st.session_state.rag_retriever = UploadedRAGRetriever(vector_store)
+                        else:
+                            st.error(f"❌ {message}")
+                    
+                    except Exception as e:
+                        st.error(f"❌ Error: {str(e)}")
+        
+        if st.session_state.current_pdf:
+            st.success(f"✅ Using: {st.session_state.current_pdf}")
     
     st.divider()
     
     # About
     st.header("ℹ️ About")
     st.write("""
-    This is a **Retrieval-Augmented Generation (RAG)** system that:
-    
-    1. **Retrieves** relevant documents from a vector database
-    2. **Augments** the LLM with actual document content
-    3. **Generates** grounded answers (not hallucinations)
-    
-    **Key Features:**
-    - Semantic search (understands meaning, not just keywords)
-    - Source attribution (shows which docs were used)
-    - Relevance scores (confidence in results)
-    - Query tracking (all questions logged)
+    **RAG System** (Retrieval-Augmented Generation):
+    - Retrieves relevant document chunks
+    - Grounds LLM in actual documents
+    - Prevents hallucinations
+    - Shows sources for answers
     """)
-    
-    st.divider()
-    
-    # Stats
-    st.header("📊 System Stats")
-    stats = get_api_stats()
-    if stats:
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Model", "Gemini 2.5 Flash")
-        with col2:
-            st.metric("Database", "ChromaDB")
-        
-        col3, col4 = st.columns(2)
-        with col3:
-            st.metric("Embeddings", "Gemini")
-        with col4:
-            st.metric("Logging", "SQLite")
+
 
 # Main Content
-if not api_healthy:
-    st.error("⚠️ RAG API is not running!")
-    st.info("Start the API with: `python -m src.API.main`")
-else:
-    # Two columns layout
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        st.header("💬 Ask a Question")
-        
-        # Question input
-        question = st.text_area(
-            "Enter your question about the clinical documents:",
-            placeholder="e.g., What medications did the patient take?",
-            height=100
-        )
-        
-        # Submit button
-        if st.button("🔍 Search Documents", use_container_width=True):
-            if question.strip():
-                with st.spinner("🤔 Searching documents and generating answer..."):
-                    result = query_rag(question)
-                
-                # Add to history
-                st.session_state.query_history.append({
-                    "timestamp": datetime.now(),
-                    "question": question,
-                    "result": result
-                })
-                
-                # Display result
-                if "error" in result:
-                    st.error(f"❌ {result['error']}")
-                    st.write(result.get('message', ''))
-                else:
-                    # Answer
-                    st.markdown("### 📝 Answer")
-                    st.markdown(f"""
-                    <div class="answer-box">
-                    {result['answer']}
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    # Sources
-                    st.markdown("### 📚 Sources Used")
-                    
-                    if result['sources']:
-                        for i, source in enumerate(result['sources'], 1):
-                            with st.expander(
-                                f"📄 Source {i}: {source['source']} "
-                                f"(Relevance: {source['relevance_score']:.2%})"
-                            ):
-                                st.write(f"**Chunk:** {source['chunk_number']}")
-                                st.write(f"**Relevance Score:** {source['relevance_score']:.4f}")
-                                st.markdown("**Preview:**")
-                                st.write(source['preview'])
-                    else:
-                        st.info("No sources found")
-                    
-                    # Metadata
-                    st.markdown("### 📊 Query Metadata")
-                    col1, col2, col3 = st.columns(3)
-                    
-                    with col1:
-                        st.metric(
-                            "Latency",
-                            f"{result['latency_ms']:.0f}ms"
-                        )
-                    
-                    with col2:
-                        st.metric(
-                            "Documents Retrieved",
-                            result['retrieval_count']
-                        )
-                    
-                    with col3:
-                        if result['sources']:
-                            top_score = result['sources'][0]['relevance_score']
-                            st.metric(
-                                "Top Relevance",
-                                f"{top_score:.2%}"
-                            )
-            else:
-                st.warning("Please enter a question!")
-    
-    with col2:
-        st.header("📋 Query History")
-        
-        if st.session_state.query_history:
-            # Show recent queries
-            for i, entry in enumerate(reversed(st.session_state.query_history[-5:])):
-                with st.expander(
-                    f"Q{len(st.session_state.query_history)-i}: "
-                    f"{entry['question'][:40]}..."
-                ):
-                    st.write(f"**Time:** {entry['timestamp'].strftime('%H:%M:%S')}")
-                    if "error" not in entry['result']:
-                        st.write(f"**Sources:** {entry['result']['retrieval_count']}")
-                        st.write(f"**Latency:** {entry['result']['latency_ms']:.0f}ms")
-        else:
-            st.info("No queries yet. Ask a question to start!")
+col1, col2 = st.columns([2, 1])
 
-# Footer
+with col1:
+    st.header("💬 Ask a Question")
+    
+    question = st.text_area(
+        "Enter your question:",
+        placeholder="e.g., What medications did the patient take?",
+        height=100
+    )
+    
+    if st.button("🔍 Search Documents", use_container_width=True):
+        if question.strip():
+            with st.spinner("🤔 Searching and generating answer..."):
+                # Choose RAG source
+                if mode == "Upload Custom PDF" and st.session_state.rag_retriever:
+                    # Use local RAG for uploaded PDF
+                    result = query_local_rag(question, st.session_state.rag_retriever)
+                else:
+                    # Use API RAG for sample document
+                    result = query_rag(question)
+            
+            # Add to history
+            st.session_state.query_history.append({
+                "timestamp": datetime.now(),
+                "question": question,
+                "result": result
+            })
+            
+            # Display result
+            if "error" in result:
+                st.error(f"❌ {result['error']}")
+            else:
+                # Answer
+                st.markdown("### 📝 Answer")
+                st.markdown(f"""
+                <div class="answer-box">
+                {result['answer']}
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Sources
+                st.markdown("### 📚 Sources Used")
+                
+                if result.get('sources'):
+                    for i, source in enumerate(result['sources'], 1):
+                        with st.expander(
+                            f"📄 Source {i}: {source.get('source', 'unknown')} "
+                            f"(Relevance: {source.get('relevance_score', 0):.2%})"
+                        ):
+                            st.write(f"**Chunk:** {source.get('chunk_number', 'N/A')}")
+                            st.write(f"**Relevance Score:** {source.get('relevance_score', 0):.4f}")
+                            st.markdown("**Preview:**")
+                            st.write(source.get('preview', 'N/A'))
+                
+                # Metadata
+                st.markdown("### 📊 Query Metadata")
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.metric("Latency", f"{result.get('latency_ms', 0):.0f}ms")
+                
+                with col2:
+                    st.metric("Documents", result.get('retrieval_count', 0))
+                
+                with col3:
+                    if result.get('sources'):
+                        top_score = result['sources'][0]['relevance_score']
+                        st.metric("Top Score", f"{top_score:.2%}")
+        else:
+            st.warning("Please enter a question!")
+
+with col2:
+    st.header("📋 History")
+    
+    if st.session_state.query_history:
+        for i, entry in enumerate(reversed(st.session_state.query_history[-5:])):
+            with st.expander(
+                f"Q{len(st.session_state.query_history)-i}: "
+                f"{entry['question'][:30]}..."
+            ):
+                st.write(f"**Time:** {entry['timestamp'].strftime('%H:%M:%S')}")
+    else:
+        st.info("No queries yet")
+
 st.divider()
 st.markdown("""
 <div style="text-align: center; color: #666; font-size: 0.9rem;">
-    Healthcare RAG Assistant | Powered by Gemini + ChromaDB | Last Updated: 2026-05-24
+    Healthcare RAG Assistant | Powered by Gemini + ChromaDB
 </div>
 """, unsafe_allow_html=True)
