@@ -1,4 +1,4 @@
-markdown# 🏥 Healthcare RAG Assistant
+🏥 Healthcare RAG Assistant
 
 A production-ready **Retrieval-Augmented Generation (RAG)** system for clinical document intelligence. Ask questions about medical documents and get grounded answers with source attribution.
 
