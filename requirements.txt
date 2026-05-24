@@ -1,0 +1,15 @@
+langchain
+langchain-google-genai
+langchain-chroma
+chromadb
+pypdf
+python-dotenv
+fastapi
+uvicorn
+psycopg2-binary
+sqlalchemy
+mlflow
+streamlit
+python-multipart
+pydantic
+requests

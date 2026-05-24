@@ -1,0 +1,14 @@
+.env
+venv/
+*.pyc
+__pycache__/
+.vscode/
+.idea/
+data/raw/*
+data/processed/*
+*.pdf
+*.log
+mlruns/
+.mlflow/
+chromadb_storage/
+.DS_Store
