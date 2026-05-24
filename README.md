@@ -1,4 +1,4 @@
-🏥 Healthcare RAG Assistant
+# 🏥 Healthcare RAG Assistant
 
 A production-ready **Retrieval-Augmented Generation (RAG)** system for clinical document intelligence. Ask questions about medical documents and get grounded answers with source attribution.
 
@@ -21,17 +21,20 @@ A production-ready **Retrieval-Augmented Generation (RAG)** system for clinical 
 ---
 
 ## 🏗️ Architecture
+
+```
 Clinical PDFs (data/raw/)
-↓
-ETL Pipeline (extract → chunk → embed)
-↓
-ChromaDB Vector Database (semantic search)
-↓
-RAG Retriever (find relevant chunks)
-↓
-Gemini LLM (generate grounded answers)
-↓
-Streamlit UI + FastAPI API + SQLite Logs
+         ↓
+    ETL Pipeline (extract → chunk → embed)
+         ↓
+    ChromaDB Vector Database (semantic search)
+         ↓
+    RAG Retriever (find relevant chunks)
+         ↓
+    Gemini LLM (generate grounded answers)
+         ↓
+    Streamlit UI + FastAPI API + SQLite Logs
+```
 
 **Data Flow:**
 1. **Extract**: Load PDFs, extract text
@@ -77,6 +80,8 @@ cp .env.example .env
 ```
 
 Edit `.env` and add your Google API Key:
+
+```
 GOOGLE_API_KEY=your_key_here
 DB_HOST=localhost
 DB_PORT=5432
@@ -86,6 +91,7 @@ DB_NAME=healthcare_rag
 MLFLOW_TRACKING_URI=http://localhost:5000
 ENVIRONMENT=development
 CHROMA_DB_PATH=./chromadb_storage
+```
 
 5. **Create sample document (optional)**
 ```bash
@@ -207,21 +213,23 @@ curl 'http://localhost:8000/mlflow/compare?experiments=chunk_512,chunk_1024'
 ---
 
 ## 📂 Project Structure
+
+```
 Healthcare-RAG/
 │
 ├── src/                          # Source code
-│   ├── init.py
+│   ├── __init__.py
 │   ├── ETL/
-│   │   ├── init.py
+│   │   ├── __init__.py
 │   │   └── ingestion.py          # Document ingestion pipeline
 │   ├── RAG/
-│   │   ├── init.py
+│   │   ├── __init__.py
 │   │   └── retrieval.py          # RAG retrieval logic
 │   ├── API/
-│   │   ├── init.py
+│   │   ├── __init__.py
 │   │   └── main.py               # FastAPI server
 │   ├── EMBEDDINGS/
-│   │   ├── init.py
+│   │   ├── __init__.py
 │   │   └── gemini_embeddings.py  # Embedding configuration
 │   ├── database.py               # SQLite query logging
 │   ├── mlflow_tracker.py         # MLflow experiment tracking
@@ -244,6 +252,7 @@ Healthcare-RAG/
 ├── chromadb_storage/             # Vector database (auto-created)
 ├── rag_logs.db                   # SQLite logs (auto-created)
 └── mlflow.db                     # MLflow tracking (auto-created)
+```
 
 ---
 
@@ -276,17 +285,19 @@ vector_store = ingestor.run_etl_pipeline()
 - Returns grounded answer with sources
 
 **Process:**
+```
 Question: "What medications did the patient take?"
-↓
+         ↓
 Embed: [0.12, -0.45, 0.89, ..., 0.34]  (3072D vector)
-↓
+         ↓
 Search ChromaDB: Find top-3 similar chunks
-↓
+         ↓
 Build Prompt: "Based on these documents, answer..."
-↓
+         ↓
 Send to Gemini: Generate answer
-↓
+         ↓
 Return: Answer + Sources + Metrics
+```
 
 ### 3. FastAPI Server (src/API/main.py)
 
@@ -401,10 +412,12 @@ python test_setup.py
 ```
 
 Output should show:
+```
 ✅ GOOGLE_API_KEY loaded
 ✅ Embeddings working!
 ✅ LLM working!
 🎉 All systems go! Ready to build RAG pipeline.
+```
 
 ### Test 2: Test ETL Pipeline
 ```bash
@@ -412,8 +425,10 @@ python -m src.ETL.ingestion
 ```
 
 Output should show:
+```
 ✅ ETL PIPELINE COMPLETE
 ✅ Vector store created at: ./chromadb_storage
+```
 
 ### Test 3: Test RAG Retrieval
 ```bash
@@ -421,9 +436,11 @@ python -m src.RAG.retrieval
 ```
 
 Output should show:
+```
 ✅ RAG QUERY COMPLETE
 Q: What medications did the patient take?
 A: The patient takes Aspirin 500mg...
+```
 
 ### Test 4: Test FastAPI
 ```bash
@@ -456,13 +473,15 @@ Response:
 - [ ] Implement query data retention policies
 
 ### Environment Variables (Never Commit)
+```
 .env                 # DO NOT COMMIT
 .env.local          # DO NOT COMMIT
 *.pyc               # DO NOT COMMIT
-pycache/        # DO NOT COMMIT
+__pycache__/        # DO NOT COMMIT
 chromadb_storage/   # DO NOT COMMIT
 rag_logs.db         # DO NOT COMMIT
 mlflow.db           # DO NOT COMMIT
+```
 
 ---
 
@@ -486,23 +505,26 @@ Retrieval-Augmented Generation solves LLM hallucination by combining:
 | Transparency | ❌ Black box | ✅ Shows reasoning |
 
 ### How It Works
+
+```
 User Question: "What medications did the patient take?"
-↓
+    ↓
 Embedding: Convert to 3072D vector
-↓
+    ↓
 Similarity Search: Find top-3 similar chunks
-↓
+    ↓
 Retrieved Context:
-"MEDICATIONS:\n- Aspirin 500mg twice daily\n- Metformin 1000mg daily..."
-↓
+    "MEDICATIONS:\n- Aspirin 500mg twice daily\n- Metformin 1000mg daily..."
+    ↓
 Prompt Building:
-"Based on these documents: [context], Answer: [question]"
-↓
+    "Based on these documents: [context], Answer: [question]"
+    ↓
 LLM Generation: Gemini reads prompt and answers
-↓
+    ↓
 Answer: "The patient takes Aspirin, Metformin, and Lisinopril..."
-↓
+    ↓
 Return: {answer, sources, relevance_scores, latency}
+```
 
 ---
 
@@ -675,7 +697,10 @@ print(f"Success rate: {stats['success_rate_percent']}%")
 ```
 
 ### MLflow Dashboard
+
+```
 http://localhost:5000
+```
 
 - View all experiments
 - Compare metrics
